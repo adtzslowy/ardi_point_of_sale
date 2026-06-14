@@ -11,12 +11,17 @@
     <h2 class="text-sm font-medium text-neutral-900 dark:text-neutral-100">Tambah Produk</h2>
 </div>
 
-<form method="POST" action="{{ route('products.store') }}"
+<form method="POST" action="{{ route('products.store') }}" enctype="multipart/form-data"
       x-data="{
           price:           0,
           price_wholesale: 0,
           cost_price:      0,
           stock:           0,
+          imagePreview:    '',
+          onImage(e) {
+              const f = e.target.files[0]
+              this.imagePreview = f ? URL.createObjectURL(f) : ''
+          },
           formatNum(val) {
               if (!val || val == 0) return ''
               return new Intl.NumberFormat('id-ID').format(val)
@@ -51,7 +56,8 @@
                     <div>
                         <label class="label">SKU</label>
                         <input type="text" name="sku" value="{{ old('sku') }}"
-                               class="input" placeholder="mis: HP-001">
+                               class="input" placeholder="Otomatis dibuat sistem">
+                        <p class="text-[11px] text-neutral-400 mt-1">Kosongkan untuk SKU otomatis.</p>
                     </div>
 
                     <div x-data="{
@@ -242,6 +248,41 @@
 
         {{-- Kanan: Stok --}}
         <div class="space-y-4">
+
+            {{-- Foto produk --}}
+            <div class="card space-y-3">
+                <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">
+                    Foto produk
+                </h3>
+
+                <label class="block cursor-pointer">
+                    <div class="aspect-square rounded-xl border-2 border-dashed
+                                border-neutral-200 dark:border-neutral-700
+                                flex items-center justify-center overflow-hidden
+                                hover:border-primary-400 dark:hover:border-primary-600 transition-colors">
+                        <template x-if="imagePreview">
+                            <img :src="imagePreview" class="w-full h-full object-cover" alt="Preview foto produk">
+                        </template>
+                        <template x-if="!imagePreview">
+                            <div class="text-center px-4">
+                                <x-heroicon-o-photo class="w-8 h-8 mx-auto text-neutral-300 dark:text-neutral-600" />
+                                <p class="text-[11px] text-neutral-400 mt-2">Klik untuk pilih foto</p>
+                                <p class="text-[10px] text-neutral-400 mt-0.5">JPG/PNG/WEBP, maks 2 MB</p>
+                            </div>
+                        </template>
+                    </div>
+                    <input type="file" name="image" accept="image/*" @change="onImage($event)" class="hidden">
+                </label>
+
+                @error('image')
+                    <p class="text-xs text-red-500">{{ $message }}</p>
+                @enderror
+
+                <p class="text-[11px] text-amber-600 dark:text-amber-400 flex items-start gap-1">
+                    <x-heroicon-o-information-circle class="w-3.5 h-3.5 shrink-0 mt-px" />
+                    Khusus kategori <strong>aksesoris</strong>, foto produk wajib diisi.
+                </p>
+            </div>
 
             <div class="card space-y-4">
                 <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">

@@ -2,7 +2,7 @@
 @section('title', 'Transaksi')
 
 @section('content')
-<div x-data="transaksiPage({{ Js::from($products) }})">
+<div x-data="transaksiPage({{ Js::from($products) }}, {{ Js::from($bankAccounts) }})">
 
     {{-- Header --}}
     <div class="flex items-center justify-between mb-5">
@@ -78,6 +78,7 @@
                             <td class="text-center">
                                 <span x-show="r.status==='completed'" class="badge-success">Selesai</span>
                                 <span x-show="r.status==='void'" x-cloak class="badge-danger">Batal</span>
+                                <span x-show="r.status==='return'" x-cloak class="badge-neutral">Retur</span>
                             </td>
                             <td class="text-right">
                                 <button type="button" @click="openDetail(r.id)" class="text-xs text-primary-600 dark:text-primary-400 hover:underline">Detail</button>
@@ -265,6 +266,24 @@
                                        @keydown="if(['Backspace','Delete','Tab','Escape','Enter','ArrowLeft','ArrowRight'].includes($event.key))return; if(!/[0-9]/.test($event.key))$event.preventDefault();"
                                        class="input" placeholder="0">
                             </div>
+
+                            {{-- Tujuan transfer: bank / e-wallet --}}
+                            <div x-show="payment_method === 'transfer' || payment_method === 'mixed'">
+                                <label class="label">Tujuan transfer</label>
+                                <template x-if="bankAccounts.length > 0">
+                                    <select x-model="bank_account_id" class="select w-full">
+                                        <option value="">-- Pilih bank / e-wallet --</option>
+                                        <template x-for="b in bankAccounts" :key="b.id">
+                                            <option :value="b.id" x-text="b.type_label + ' · ' + b.bank_name + ' · ' + b.account_number"></option>
+                                        </template>
+                                    </select>
+                                </template>
+                                <template x-if="bankAccounts.length === 0">
+                                    <a href="{{ route('banks.index') }}" class="block text-[11px] text-amber-600 dark:text-amber-400 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20">
+                                        Belum ada rekening. Tambahkan bank / e-wallet dulu di menu Saldo bank.
+                                    </a>
+                                </template>
+                            </div>
                             <div class="flex justify-between text-xs pt-1" :class="change >= 0 ? 'text-neutral-500' : 'text-red-500'">
                                 <span x-text="change >= 0 ? 'Kembalian' : 'Kurang'"></span>
                                 <span x-text="rupiah(Math.abs(change))"></span>
@@ -294,6 +313,7 @@
                 </div>
                 <span x-show="receipt.status==='completed'" class="badge-success">Selesai</span>
                 <span x-show="receipt.status==='void'" x-cloak class="badge-danger">Batal</span>
+                <span x-show="receipt.status==='return'" x-cloak class="badge-neutral">Retur</span>
             </div>
 
             <div class="px-5 py-4 space-y-3 text-xs">
@@ -314,8 +334,12 @@
                         <span x-text="'− ' + rupiah(receipt.discount_amount)"></span>
                     </div>
                     <div class="flex justify-between text-sm font-semibold text-neutral-900 dark:text-neutral-100 pt-1"><span>Total</span><span x-text="rupiah(receipt.total)"></span></div>
-                    <div class="flex justify-between text-neutral-500 pt-1"><span>Tunai</span><span x-text="rupiah(receipt.paid_cash)"></span></div>
-                    <div class="flex justify-between text-neutral-500"><span>Transfer</span><span x-text="rupiah(receipt.paid_transfer)"></span></div>
+                    <div class="flex justify-between text-neutral-500 pt-1" x-show="receipt.paid_cash > 0"><span>Tunai</span><span x-text="rupiah(receipt.paid_cash)"></span></div>
+                    <div class="flex justify-between text-neutral-500" x-show="receipt.paid_transfer > 0"><span>Transfer</span><span x-text="rupiah(receipt.paid_transfer)"></span></div>
+                    <div class="flex justify-between text-neutral-500" x-show="receipt.bank_account" x-cloak>
+                        <span>Ke rekening</span>
+                        <span class="text-right" x-text="receipt.bank_account ? (receipt.bank_account.bank_name + ' · ' + receipt.bank_account.account_number) : ''"></span>
+                    </div>
                     <div class="flex justify-between text-neutral-500"><span>Kembalian</span><span x-text="rupiah(receipt.change_amount)"></span></div>
                 </div>
                 <p x-show="receipt.void_reason" x-cloak class="text-red-500" x-text="'Alasan batal: ' + receipt.void_reason"></p>
@@ -323,6 +347,9 @@
 
             <div class="px-5 py-4 border-t border-neutral-200 dark:border-neutral-800 flex gap-2">
                 <button type="button" @click="receiptOpen = false" class="btn-secondary flex-1 justify-center !text-xs">Tutup</button>
+                <button type="button" x-show="receipt.status==='completed' && hasReturnable" @click="openReturn()" class="btn-secondary flex-1 justify-center !text-xs">
+                    <x-heroicon-o-arrow-uturn-left class="w-3.5 h-3.5" /> Retur
+                </button>
                 <button type="button" x-show="receipt.status==='completed'" @click="voidOpen = true; voidReason = ''" class="btn-danger flex-1 justify-center !text-xs">
                     Batalkan
                 </button>
@@ -346,21 +373,91 @@
         </div>
     </div>
 
+    {{-- ============ MODAL RETUR BARANG ============ --}}
+    <div x-cloak x-show="returnOpen" @keydown.escape.window="returnOpen = false"
+         class="fixed inset-0 z-[55] flex items-center justify-center p-4 bg-black/50">
+        <div class="w-full max-w-md max-h-[90vh] overflow-y-auto bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl">
+            <div class="px-5 py-4 border-b border-neutral-200 dark:border-neutral-800">
+                <p class="text-sm font-medium text-neutral-900 dark:text-neutral-100">Retur barang</p>
+                <p class="text-[11px] text-neutral-400 mt-0.5">Pilih item & jumlah yang diretur. Stok dikembalikan.</p>
+            </div>
+
+            <div class="px-5 py-4 space-y-3 text-xs">
+                <template x-for="(it, i) in returnItems" :key="it.id">
+                    <div class="flex items-center gap-2">
+                        <div class="flex-1 min-w-0">
+                            <p class="font-medium text-neutral-900 dark:text-neutral-100 truncate" x-text="it.name"></p>
+                            <p class="text-neutral-400" x-text="rupiah(it.unit_price) + ' · bisa retur maks ' + it.returnable"></p>
+                        </div>
+                        <div class="flex items-center gap-1 shrink-0">
+                            <button type="button" @click="retDec(i)" class="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 text-neutral-500">−</button>
+                            <input type="number" min="0" :max="it.returnable" x-model.number="it.qty" @input="retClamp(i)"
+                                   class="w-10 text-center text-xs border border-neutral-200 dark:border-neutral-700 rounded py-1 bg-transparent">
+                            <button type="button" @click="retInc(i)" class="w-6 h-6 rounded border border-neutral-200 dark:border-neutral-700 text-neutral-500">+</button>
+                        </div>
+                    </div>
+                </template>
+                <div x-show="returnItems.length === 0" class="py-6 text-center text-neutral-400">Tidak ada item yang bisa diretur.</div>
+
+                <div class="pt-2 border-t border-neutral-100 dark:border-neutral-800 space-y-2">
+                    <label class="label">Metode pengembalian</label>
+                    <div class="grid grid-cols-2 gap-1">
+                        <template x-for="m in [{v:'cash',l:'Tunai'},{v:'transfer',l:'Transfer'}]" :key="m.v">
+                            <button type="button" @click="returnRefundMethod = m.v"
+                                class="text-xs py-1.5 rounded-lg border transition-colors"
+                                :class="returnRefundMethod === m.v ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium' : 'border-neutral-200 dark:border-neutral-700 text-neutral-500'"
+                                x-text="m.l"></button>
+                        </template>
+                    </div>
+
+                    <div x-show="returnRefundMethod === 'transfer'">
+                        <label class="label">Sumber dana (rekening)</label>
+                        <select x-model="returnBankId" class="select w-full">
+                            <option value="">-- Pilih bank / e-wallet --</option>
+                            <template x-for="b in bankAccounts" :key="b.id">
+                                <option :value="b.id" x-text="b.type_label + ' · ' + b.bank_name + ' · ' + b.account_number"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="label">Alasan retur</label>
+                        <textarea x-model="returnReason" rows="2" class="input resize-none" placeholder="mis: barang rusak / salah beli..."></textarea>
+                    </div>
+                </div>
+
+                <div class="flex justify-between text-sm font-semibold text-neutral-900 dark:text-neutral-100 pt-2 border-t border-neutral-100 dark:border-neutral-800">
+                    <span>Total dikembalikan</span><span x-text="rupiah(returnTotal)"></span>
+                </div>
+            </div>
+
+            <div class="flex gap-2 px-5 py-4 border-t border-neutral-200 dark:border-neutral-800">
+                <button type="button" @click="returnOpen = false" class="btn-secondary flex-1 justify-center !text-xs">Batal</button>
+                <button type="button" @click="submitReturn()" :disabled="!canReturn || returnSubmitting"
+                        class="btn-primary flex-1 justify-center !text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span x-show="!returnSubmitting">Proses retur</span>
+                    <span x-show="returnSubmitting" x-cloak>Memproses...</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
 </div>
 @endsection
 
 @push('scripts')
 <script>
 document.addEventListener('alpine:init', () => {
-    Alpine.data('transaksiPage', (products) => ({
+    Alpine.data('transaksiPage', (products, bankAccounts) => ({
         products,
+        bankAccounts: bankAccounts || [],
         detailUrl: '{{ url('transaksi') }}',
         storeUrl: '{{ route('transactions.store') }}',
 
         // state kasir
         search: '', categoryFilter: '', cart: [],
         discount_type: 'none', discount_value: 0, discountK: '',
-        payment_method: 'cash', paid_cash: 0, paid_transfer: 0, note: '',
+        payment_method: 'cash', paid_cash: 0, paid_transfer: 0, bank_account_id: '', note: '',
 
         // ui
         kasirOpen: false, receiptOpen: false, voidOpen: false,
@@ -369,6 +466,10 @@ document.addEventListener('alpine:init', () => {
         recent: [],
         toast: { show: false, type: 'success', msg: '' },
         _t: null,
+
+        // retur
+        returnOpen: false, returnItems: [], returnReason: '',
+        returnRefundMethod: 'cash', returnBankId: '', returnSubmitting: false,
 
         get filteredProducts() {
             const s = this.search.toLowerCase();
@@ -391,7 +492,23 @@ document.addEventListener('alpine:init', () => {
             return c + t;
         },
         get change() { return this.paid - this.total; },
-        get canPay() { return this.cart.length > 0 && this.total > 0 && this.change >= 0; },
+        get needsBank() {
+            return (this.payment_method === 'transfer' || this.payment_method === 'mixed') && (this.paid_transfer || 0) > 0;
+        },
+        get canPay() {
+            if (this.cart.length === 0 || this.total <= 0 || this.change < 0) return false;
+            if (this.needsBank && !this.bank_account_id) return false;
+            return true;
+        },
+
+        // retur
+        get hasReturnable() { return (this.receipt.items || []).some(i => (i.returnable || 0) > 0); },
+        get returnTotal() { return this.returnItems.reduce((s, i) => s + (i.qty || 0) * i.unit_price, 0); },
+        get canReturn() {
+            if (this.returnTotal <= 0 || !this.returnReason.trim()) return false;
+            if (this.returnRefundMethod === 'transfer' && !this.returnBankId) return false;
+            return true;
+        },
 
         openKasir() { this.resetCart(); this.kasirOpen = true; },
         addToCart(p) {
@@ -406,7 +523,7 @@ document.addEventListener('alpine:init', () => {
         removeItem(i) { this.cart.splice(i, 1); },
         resetCart() {
             this.cart = []; this.discount_type = 'none'; this.discount_value = 0; this.discountK = '';
-            this.payment_method = 'cash'; this.paid_cash = 0; this.paid_transfer = 0;
+            this.payment_method = 'cash'; this.paid_cash = 0; this.paid_transfer = 0; this.bank_account_id = '';
             this.note = ''; this.search = ''; this.categoryFilter = '';
         },
         rupiah(n) { return 'Rp ' + new Intl.NumberFormat('id-ID').format(n || 0); },
@@ -439,6 +556,7 @@ document.addEventListener('alpine:init', () => {
                         payment_method: this.payment_method,
                         paid_cash: this.payment_method === 'transfer' ? 0 : (this.paid_cash || 0),
                         paid_transfer: this.payment_method === 'cash' ? 0 : (this.paid_transfer || 0),
+                        bank_account_id: this.needsBank ? (this.bank_account_id || null) : null,
                         note: this.note || null,
                     }),
                 });
@@ -490,6 +608,49 @@ document.addEventListener('alpine:init', () => {
                 this.voidOpen = false; this.voidReason = '';
                 this.notify('success', 'Transaksi dibatalkan & stok dikembalikan.');
             } catch (e) { this.notify('error', 'Terjadi kesalahan jaringan.'); }
+        },
+
+        // ====== RETUR ======
+        openReturn() {
+            this.returnItems = (this.receipt.items || [])
+                .filter(i => (i.returnable || 0) > 0)
+                .map(i => ({ id: i.id, name: i.name, unit_price: i.unit_price, returnable: i.returnable, qty: 0 }));
+            this.returnReason = '';
+            this.returnRefundMethod = 'cash';
+            this.returnBankId = '';
+            this.returnOpen = true;
+        },
+        retInc(i) { if (this.returnItems[i].qty < this.returnItems[i].returnable) this.returnItems[i].qty++; },
+        retDec(i) { if (this.returnItems[i].qty > 0) this.returnItems[i].qty--; },
+        retClamp(i) {
+            let q = parseInt(this.returnItems[i].qty) || 0;
+            this.returnItems[i].qty = Math.max(0, Math.min(q, this.returnItems[i].returnable));
+        },
+        async submitReturn() {
+            if (!this.canReturn || this.returnSubmitting) return;
+            this.returnSubmitting = true;
+            try {
+                const res = await fetch(this.detailUrl + '/' + this.receipt.id + '/retur', {
+                    method: 'POST', headers: this._headers(),
+                    body: JSON.stringify({
+                        items: this.returnItems.filter(i => (i.qty || 0) > 0).map(i => ({ item_id: i.id, qty: i.qty })),
+                        refund_method: this.returnRefundMethod,
+                        bank_account_id: this.returnRefundMethod === 'transfer' ? (this.returnBankId || null) : null,
+                        reason: this.returnReason,
+                    }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) { this.notify('error', data.message || 'Gagal memproses retur.'); return; }
+                this.receipt = data.receipt;
+                const r = this.recent.find(x => x.id === this.receipt.id);
+                if (r) r.status = this.receipt.status;
+                this.returnOpen = false;
+                this.notify('success', 'Retur ' + data.return.return_number + ' berhasil · Rp ' + new Intl.NumberFormat('id-ID').format(data.return.total_refund));
+            } catch (e) {
+                this.notify('error', 'Terjadi kesalahan jaringan.');
+            } finally {
+                this.returnSubmitting = false;
+            }
         },
     }));
 });

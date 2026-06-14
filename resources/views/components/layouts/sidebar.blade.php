@@ -28,7 +28,7 @@
                 'route' => 'products.index'
             ],
             [
-                'label' => 'Jasa / Servis',
+                'label' => 'Layanan & Jasa',
                 'icon' => 'heroicon-o-wrench-screwdriver',
                 'active' => request()->routeIs('services.*'),
                 'route' => 'services.index',
@@ -40,11 +40,14 @@
                 'label' => 'Saldo bank',
                 'icon' => 'heroicon-o-building-library',
                 'active' => request()->routeIs('banks.*'),
+                'route' => 'banks.index',
             ],
             ['label' => 'Laporan', 'icon' => 'heroicon-o-chart-bar', 'active' => request()->routeIs('reports.*')],
         ],
         'Pengaturan' => [
-            ['label' => 'Karyawan', 'icon' => 'heroicon-o-users', 'active' => request()->routeIs('user-manage.*'), 'route' => 'user-manage.index'],
+            ...($user?->hasRole('owner') ? [
+                ['label' => 'Karyawan', 'icon' => 'heroicon-o-users', 'active' => request()->routeIs('user-manage.*'), 'route' => 'user-manage.index'],
+            ] : []),
             ['label' => 'Pengaturan', 'icon' => 'heroicon-o-cog-6-tooth', 'active' => request()->routeIs('settings.*')],
             [
                 'label' => 'Log aktivitas',

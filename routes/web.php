@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BankController;
 use App\Http\Controllers\BranchSwitchController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\DashboardController;
@@ -64,14 +65,27 @@ Route::middleware(['auth', 'branch.access'])->group(function () {
     // Kategori produk
     Route::post('/kategori', [CategoryController::class, 'store'])->name('categories.store');
 
-    Route::prefix('user-management')->name('user-manage.')->group(function () {
-        Route::get('/', [UserManagement::class, 'index'])->name('index');
+    Route::prefix('user-management')->name('user-manage.')->middleware('role:owner')->group(function () {
+        Route::get('/',                          [UserManagement::class, 'index'])->name('index');
+        Route::post('/',                         [UserManagement::class, 'store'])->name('store');
+        Route::put('/{user}',                    [UserManagement::class, 'update'])->name('update');
+        Route::delete('/{user}',                 [UserManagement::class, 'destroy'])->name('destroy');
+        Route::post('/{user}/reset-password',    [UserManagement::class, 'resetPassword'])->name('reset-password');
     });
 
     Route::prefix('transaksi')->name('transactions.')->group(function () {
-        Route::get('/',                    [TransactionController::class, 'index'])->name('index');
-        Route::post('/',                   [TransactionController::class, 'store'])->name('store');
-        Route::get('/{transaction}',       [TransactionController::class, 'show'])->name('show');
-        Route::post('/{transaction}/void', [TransactionController::class, 'void'])->name('void');
+        Route::get('/',                     [TransactionController::class, 'index'])->name('index');
+        Route::post('/',                    [TransactionController::class, 'store'])->name('store');
+        Route::get('/{transaction}',        [TransactionController::class, 'show'])->name('show');
+        Route::post('/{transaction}/void',  [TransactionController::class, 'void'])->name('void');
+        Route::post('/{transaction}/retur', [TransactionController::class, 'processReturn'])->name('return');
+    });
+
+    // Rekening bank & e-wallet (saldo)
+    Route::prefix('bank')->name('banks.')->group(function () {
+        Route::get('/',         [BankController::class, 'index'])->name('index');
+        Route::post('/',        [BankController::class, 'store'])->name('store');
+        Route::put('/{bank}',   [BankController::class, 'update'])->name('update');
+        Route::delete('/{bank}',[BankController::class, 'destroy'])->name('destroy');
     });
 });

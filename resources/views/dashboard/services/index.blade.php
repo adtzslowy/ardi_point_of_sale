@@ -1,16 +1,18 @@
 @extends('layouts.app')
-@section('title', 'Jasa / Servis')
+@section('title', 'Layanan & Jasa')
 
 @section('content')
 
 <div
     x-data="{
         open: false,
-        svc: { id: '', name: '', kind: 'servis', price: 0, default_fee: 0 },
+        svc: { id: '', name: '', kind: 'servis', price: 0, default_fee: 0, cash_direction: 'none', fee_tiers: [] },
         nominal: 0,
         fee: 0,
         qty: 1,
         payment_method: 'cash',
+        bank_account_id: '',
+        bankAccounts: {{ Js::from($bankAccounts) }},
         hasShift: {{ $activeShift ? 'true' : 'false' }},
         sellTemplate: '{{ route('services.sell', '__ID__') }}',
         formatNum(val) {
@@ -18,12 +20,37 @@
             return new Intl.NumberFormat('id-ID').format(val)
         },
         openSell(svc) {
-            this.svc = svc
+            this.svc = { cash_direction: 'none', fee_tiers: [], ...svc }
             this.nominal = 0
-            this.fee = svc.default_fee
+            this.fee = svc.default_fee || 0
             this.qty = 1
             this.payment_method = 'cash'
+            this.bank_account_id = ''
             this.open = true
+        },
+        computeFee() {
+            const tiers = (this.svc.fee_tiers || [])
+                .map(t => ({ max: (t.max === '' || t.max === null || t.max === undefined) ? null : parseInt(t.max), fee: parseInt(t.fee) || 0 }))
+                .sort((a, b) => (a.max ?? Infinity) - (b.max ?? Infinity))
+            if (tiers.length === 0) { this.fee = this.svc.default_fee || 0; return }
+            for (const t of tiers) {
+                if (t.max === null || this.nominal <= t.max) { this.fee = t.fee; return }
+            }
+            this.fee = tiers[tiers.length - 1].fee
+        },
+        get movesCash() {
+            return this.svc.kind === 'keuangan' && (this.svc.cash_direction === 'tarik' || this.svc.cash_direction === 'setor')
+        },
+        get cashEffect() {
+            if (!this.movesCash) return 0
+            return this.svc.cash_direction === 'tarik' ? (this.nominal + this.fee) : (this.fee - this.nominal)
+        },
+        get canSell() {
+            if (this.svc.kind === 'keuangan') {
+                if (!this.nominal || this.nominal < 1) return false
+                if (this.movesCash && !this.bank_account_id) return false
+            }
+            return true
         },
         get action() {
             return this.sellTemplate.replace('__ID__', this.svc.id)
@@ -37,14 +64,14 @@
 
 <div class="flex items-center justify-between mb-5">
     <div>
-        <h2 class="text-sm font-medium text-neutral-900 dark:text-neutral-100">Jasa / Servis</h2>
+        <h2 class="text-sm font-medium text-neutral-900 dark:text-neutral-100">Layanan & Jasa</h2>
         <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-            Kelola jasa servis & jasa keuangan (tarik tunai, transfer, token, dll)
+            Layanan digital (PPOB, pulsa, transfer, e-wallet) & jasa servis
         </p>
     </div>
     <a href="{{ route('services.create') }}" class="btn-primary">
         <x-heroicon-o-plus class="w-4 h-4" />
-        Tambah jasa
+        Tambah layanan
     </a>
 </div>
 
@@ -164,13 +191,7 @@
                             <div class="flex items-center justify-end gap-2">
                                 @if ($service->is_active && $activeShift)
                                     <button type="button"
-                                            @click='openSell(@json([
-                                                "id" => $service->id,
-                                                "name" => $service->name,
-                                                "kind" => $service->kind,
-                                                "price" => (int) $service->price,
-                                                "default_fee" => (int) $service->default_fee,
-                                            ], JSON_HEX_APOS | JSON_HEX_QUOT))'
+                                            @click="openSell({ id: '{{ $service->id }}', name: {{ Js::from($service->name) }}, kind: '{{ $service->kind }}', price: {{ (int) $service->price }}, default_fee: {{ (int) $service->default_fee }}, cash_direction: '{{ $service->cash_direction ?? 'none' }}', fee_tiers: {{ Js::from($service->fee_tiers ?? []) }} })"
                                             class="text-xs text-primary-600 dark:text-primary-400 hover:underline">
                                         Catat
                                     </button>
@@ -227,7 +248,7 @@
                             <span class="absolute left-3 top-1/2 -translate-y-1/2
                                          text-sm text-neutral-500 pointer-events-none">Rp</span>
                             <input type="text" :value="formatNum(nominal)"
-                                   @input="nominal = parseInt($event.target.value.replace(/\D/g,'')) || 0"
+                                   @input="nominal = parseInt($event.target.value.replace(/\D/g,'')) || 0; computeFee()"
                                    class="input pl-9" placeholder="mis: 100.000">
                             <input type="hidden" name="nominal" :value="nominal">
                         </div>
@@ -242,8 +263,43 @@
                                    class="input pl-9">
                             <input type="hidden" name="fee" :value="fee">
                         </div>
-                        <p class="text-[11px] text-neutral-400 mt-1">Fee inilah yang jadi profit konter.</p>
+                        <p class="text-[11px] text-neutral-400 mt-1">Terisi otomatis dari tarif; bisa diubah. Fee = profit konter.</p>
                     </div>
+
+                    {{-- Rekening tujuan + efek saldo (untuk tarik/setor) --}}
+                    <template x-if="movesCash">
+                        <div class="space-y-2">
+                            <div>
+                                <label class="label">Rekening terdampak</label>
+                                <template x-if="bankAccounts.length > 0">
+                                    <select x-model="bank_account_id" name="bank_account_id" class="select w-full">
+                                        <option value="">-- Pilih bank / e-wallet --</option>
+                                        <template x-for="b in bankAccounts" :key="b.id">
+                                            <option :value="b.id" x-text="b.type_label + ' · ' + b.bank_name + ' · ' + b.account_number"></option>
+                                        </template>
+                                    </select>
+                                </template>
+                                <template x-if="bankAccounts.length === 0">
+                                    <a href="{{ route('banks.index') }}" class="block text-[11px] text-amber-600 dark:text-amber-400 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20">
+                                        Belum ada rekening. Tambah dulu di menu Saldo bank.
+                                    </a>
+                                </template>
+                            </div>
+
+                            <div class="text-[11px] px-3 py-2 rounded-lg bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 space-y-0.5">
+                                <div class="flex justify-between">
+                                    <span class="text-neutral-500">Saldo bank</span>
+                                    <span :class="svc.cash_direction === 'tarik' ? 'text-red-500' : 'text-primary-600 dark:text-primary-400'"
+                                          x-text="(svc.cash_direction === 'tarik' ? '− ' : '+ ') + 'Rp ' + nominal.toLocaleString('id-ID')"></span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-neutral-500">Kas fisik</span>
+                                    <span :class="cashEffect >= 0 ? 'text-primary-600 dark:text-primary-400' : 'text-red-500'"
+                                          x-text="(cashEffect >= 0 ? '+ ' : '− ') + 'Rp ' + Math.abs(cashEffect).toLocaleString('id-ID')"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </template>
 
@@ -255,9 +311,9 @@
                 </div>
             </template>
 
-            <div>
+            <div x-show="!movesCash">
                 <label class="label">Metode bayar</label>
-                <select name="payment_method" x-model="payment_method" class="select">
+                <select name="payment_method" x-model="payment_method" class="select" :disabled="movesCash">
                     <option value="cash">Tunai</option>
                     <option value="transfer">Transfer</option>
                 </select>
@@ -283,7 +339,8 @@
                     class="btn-secondary flex-1 justify-center !text-xs">
                 Batal
             </button>
-            <button type="submit" class="btn-primary flex-1 justify-center !text-xs">
+            <button type="submit" :disabled="!canSell"
+                    class="btn-primary flex-1 justify-center !text-xs disabled:opacity-50 disabled:cursor-not-allowed">
                 <x-heroicon-o-check class="w-3.5 h-3.5" />
                 Catat
             </button>

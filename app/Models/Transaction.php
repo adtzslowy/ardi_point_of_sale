@@ -15,7 +15,7 @@
       protected $fillable = [
           'branch_id', 'shift_id', 'user_id', 'trx_number',
           'subtotal', 'discount_type', 'discount_value', 'discount_amount', 'total',
-          'payment_method', 'paid_cash', 'paid_transfer', 'change_amount',
+          'payment_method', 'paid_cash', 'paid_transfer', 'bank_account_id', 'change_amount',
           'total_profit', 'status', 'note', 'void_reason',
       ];
 
@@ -48,6 +48,16 @@
       public function items(): HasMany
       {
           return $this->hasMany(TransactionItem::class);
+      }
+
+      public function bankAccount(): BelongsTo
+      {
+          return $this->belongsTo(Bank::class, 'bank_account_id');
+      }
+
+      public function returns(): HasMany
+      {
+          return $this->hasMany(TransactionReturn::class);
       }
 
       public function scopeForBranch($q, $branchId)

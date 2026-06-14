@@ -17,6 +17,7 @@ class Product extends Model
         'category_id',
         'name',
         'sku',
+        'image',
         'price',
         'price_wholesale',
         'cost_price',
@@ -92,5 +93,34 @@ class Product extends Model
     public function getFormattedPriceAttribute(): string
     {
         return 'Rp ' . number_format($this->price, 0, ',', '.');
+    }
+
+    public function getImageUrlAttribute(): ?string
+    {
+        return $this->image ? asset('storage/' . $this->image) : null;
+    }
+
+    /**
+     * Buat SKU otomatis & unik per cabang.
+     * Format: PREFIX-NNNN (PREFIX dari nama kategori, fallback "PRD").
+     */
+    public static function generateSku(string $branchId, ?Category $category = null): string
+    {
+        $prefix = 'PRD';
+        if ($category && $category->name) {
+            $alpha = strtoupper(preg_replace('/[^A-Za-z]/', '', $category->name));
+            if (strlen($alpha) >= 2) {
+                $prefix = substr($alpha, 0, 3);
+            }
+        }
+
+        $seq = static::withTrashed()->where('branch_id', $branchId)->count() + 1;
+
+        do {
+            $sku = $prefix . '-' . str_pad((string) $seq, 4, '0', STR_PAD_LEFT);
+            $seq++;
+        } while (static::withTrashed()->where('branch_id', $branchId)->where('sku', $sku)->exists());
+
+        return $sku;
     }
 }

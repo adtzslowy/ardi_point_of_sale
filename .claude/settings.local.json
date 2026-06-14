@@ -5,7 +5,12 @@
       "Bash(CLAUDE_CODE_TMPDIR=/tmp php artisan tinker --execute=\"echo DB::select\\('SHOW COLUMNS FROM sessions'\\)[2]->Type;\")",
       "Bash(CLAUDE_CODE_TMPDIR=/tmp php artisan tinker '--execute=foreach\\(DB::select\\('\\\\''SHOW COLUMNS FROM sessions'\\\\''\\) as $i => $col\\) echo $i.'\\\\'': '\\\\''.$col->Field.'\\\\'' => '\\\\''.$col->Type.PHP_EOL;')",
       "Bash(CLAUDE_CODE_TMPDIR=/tmp php artisan tinker --execute=\"echo DB::select\\(\\\\\"SELECT @@sql_mode\\\\\"\\)[0]->{'@@sql_mode'};\")",
-      "Bash(CLAUDE_CODE_TMPDIR=/tmp php artisan tinker '--execute=foreach\\(DB::select\\('\\\\''SHOW COLUMNS FROM sessions'\\\\''\\) as $col\\) echo $col->Field.'\\\\'' => '\\\\''.$col->Type.PHP_EOL;')"
+      "Bash(CLAUDE_CODE_TMPDIR=/tmp php artisan tinker '--execute=foreach\\(DB::select\\('\\\\''SHOW COLUMNS FROM sessions'\\\\''\\) as $col\\) echo $col->Field.'\\\\'' => '\\\\''.$col->Type.PHP_EOL;')",
+      "Bash(php artisan *)",
+      "Bash(/Applications/XAMPP/xamppfiles/bin/php --version)",
+      "Bash(/Applications/XAMPP/xamppfiles/bin/php artisan *)",
+      "Read(//Applications/XAMPP/xamppfiles/share/mysql/**)",
+      "Bash(/Applications/XAMPP/xamppfiles/bin/mysql.server start *)"
     ]
   }
 }

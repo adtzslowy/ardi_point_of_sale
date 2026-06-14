@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\ActivityLog;
+use App\Models\Bank;
 use App\Models\Category;
 use App\Models\Service;
 use App\Models\Shift;
@@ -39,8 +40,17 @@ class ServiceController extends Controller
         $financeCount = Service::forBranch($branchId)->active()->kind('keuangan')->count();
         $activeShift = Shift::forBranch($branchId)->open()->latest()->first();
 
+        $bankAccounts = Bank::forBranch($branchId)->active()
+            ->orderBy('type')->orderBy('bank_name')->get()
+            ->map(fn ($b) => [
+                'id'         => $b->id,
+                'type_label' => $b->type_label,
+                'bank_name'  => $b->bank_name,
+                'account_number' => $b->account_number,
+            ]);
+
         return view('dashboard.services.index', compact(
-            'services', 'categories', 'servisCount', 'financeCount', 'activeShift'
+            'services', 'categories', 'servisCount', 'financeCount', 'activeShift', 'bankAccounts'
         ));
     }
 
@@ -104,15 +114,23 @@ class ServiceController extends Controller
             return back()->with('error', 'Shift belum dibuka. Buka shift dulu untuk mencatat jasa.');
         }
 
+        $movesCash = $service->kind === 'keuangan' && in_array($service->cash_direction, ['tarik', 'setor']);
+
         if ($service->kind === 'keuangan') {
-            $data = $request->validate([
-                'nominal'        => 'required|integer|min:1',
-                'fee'            => 'required|integer|min:0',
-                'payment_method' => 'required|in:cash,transfer',
-                'note'           => 'nullable|string|max:500',
-            ]);
+            $rules = [
+                'nominal' => 'required|integer|min:1',
+                'fee'     => 'required|integer|min:0',
+                'note'    => 'nullable|string|max:500',
+            ];
+            if ($movesCash) {
+                $rules['bank_account_id'] = 'required|exists:bank_accounts,id';
+            } else {
+                $rules['payment_method'] = 'required|in:cash,transfer';
+            }
+            $data = $request->validate($rules);
+
             $qty      = 1;
-            $unit     = (int) $data['fee'];
+            $unit     = (int) $data['fee'];      // fee = pendapatan konter
             $subtotal = $unit;
             $profit   = $unit;
             $nominal  = (int) $data['nominal'];
@@ -131,49 +149,84 @@ class ServiceController extends Controller
             $cost     = (int) $service->cost_price;
         }
 
-        $transaction = DB::transaction(function () use (
-            $service, $branchId, $activeShift, $data, $qty, $unit, $subtotal, $profit, $nominal, $cost
-        ) {
-            $countToday = Transaction::where('branch_id', $branchId)
-                ->whereDate('created_at', today())->count();
-            $trxNumber = 'JSA-' . now()->format('Ymd') . '-' . str_pad($countToday + 1, 4, '0', STR_PAD_LEFT);
+        try {
+            $transaction = DB::transaction(function () use (
+                $service, $branchId, $activeShift, $data, $qty, $unit, $subtotal, $profit, $nominal, $cost, $movesCash
+            ) {
+                $countToday = Transaction::where('branch_id', $branchId)
+                    ->whereDate('created_at', today())->count();
+                $trxNumber = 'JSA-' . now()->format('Ymd') . '-' . str_pad($countToday + 1, 4, '0', STR_PAD_LEFT);
 
-            $method = $data['payment_method'];
+                // Default: fee dibayar via metode pilihan (jasa servis / keuangan fee-saja)
+                $method        = $data['payment_method'] ?? 'cash';
+                $paidCash      = $method === 'cash' ? $subtotal : 0;
+                $paidTransfer  = $method === 'transfer' ? $subtotal : 0;
+                $bankAccount   = null;
 
-            $transaction = Transaction::create([
-                'branch_id'       => $branchId,
-                'shift_id'        => $activeShift->id,
-                'user_id'         => auth()->id(),
-                'trx_number'      => $trxNumber,
-                'subtotal'        => $subtotal,
-                'discount_type'   => 'none',
-                'discount_value'  => 0,
-                'discount_amount' => 0,
-                'total'           => $subtotal,
-                'payment_method'  => $method,
-                'paid_cash'       => $method === 'cash' ? $subtotal : 0,
-                'paid_transfer'   => $method === 'transfer' ? $subtotal : 0,
-                'change_amount'   => 0,
-                'total_profit'    => $profit,
-                'status'          => 'completed',
-                'note'            => $data['note'] ?? null,
-            ]);
+                if ($movesCash) {
+                    // Jasa keuangan yang menggerakkan nominal (tarik / setor)
+                    $bankAccount = Bank::forBranch($branchId)->active()
+                        ->lockForUpdate()->find($data['bank_account_id']);
+                    if (!$bankAccount) {
+                        throw new \RuntimeException('Rekening tidak valid atau tidak aktif.');
+                    }
 
-            TransactionItem::create([
-                'transaction_id' => $transaction->id,
-                'item_type'      => 'service',
-                'item_id'        => $service->id,
-                'item_name'      => $service->name,
-                'unit_price'     => $unit,
-                'cost_price'     => $cost,
-                'nominal'        => $nominal,
-                'qty'            => $qty,
-                'subtotal'       => $subtotal,
-                'profit'         => $profit,
-            ]);
+                    $method       = 'cash';
+                    $paidTransfer = 0;
+                    // Efek ke kas fisik = pergerakan kas bersih (nominal + fee), ditampung di paid_cash
+                    if ($service->cash_direction === 'tarik') {
+                        $paidCash = $nominal + $subtotal;   // kas naik: terima tunai nominal + fee
+                    } else { // setor
+                        $paidCash = $subtotal - $nominal;   // kas turun: keluarkan tunai nominal, terima fee
+                    }
+                }
 
-            return $transaction;
-        });
+                $transaction = Transaction::create([
+                    'branch_id'       => $branchId,
+                    'shift_id'        => $activeShift->id,
+                    'user_id'         => auth()->id(),
+                    'trx_number'      => $trxNumber,
+                    'subtotal'        => $subtotal,
+                    'discount_type'   => 'none',
+                    'discount_value'  => 0,
+                    'discount_amount' => 0,
+                    'total'           => $subtotal,
+                    'payment_method'  => $method,
+                    'paid_cash'       => $paidCash,
+                    'paid_transfer'   => $paidTransfer,
+                    'bank_account_id' => $bankAccount?->id,
+                    'change_amount'   => 0,
+                    'total_profit'    => $profit,
+                    'status'          => 'completed',
+                    'note'            => $data['note'] ?? null,
+                ]);
+
+                TransactionItem::create([
+                    'transaction_id' => $transaction->id,
+                    'item_type'      => 'service',
+                    'item_id'        => $service->id,
+                    'item_name'      => $service->name,
+                    'unit_price'     => $unit,
+                    'cost_price'     => $cost,
+                    'nominal'        => $nominal,
+                    'qty'            => $qty,
+                    'subtotal'       => $subtotal,
+                    'profit'         => $profit,
+                ]);
+
+                // Gerakkan saldo bank sesuai arah dana
+                if ($bankAccount) {
+                    $mutType = $service->cash_direction === 'tarik' ? 'out' : 'in';
+                    $bankAccount->applyMutation($mutType, $nominal, "{$service->name} {$trxNumber}");
+                }
+
+                $activeShift->recalculate();
+
+                return $transaction;
+            });
+        } catch (\RuntimeException $e) {
+            return back()->with('error', $e->getMessage());
+        }
 
         ActivityLog::log('created', $transaction, null, $transaction->toArray());
 
@@ -193,22 +246,48 @@ class ServiceController extends Controller
 
         if ($base['kind'] === 'keuangan') {
             $extra = $request->validate([
-                'default_fee' => 'required|integer|min:0',
+                'default_fee'      => 'required|integer|min:0',
+                'cash_direction'   => 'required|in:none,tarik,setor',
+                'fee_tiers'        => 'nullable|array',
+                'fee_tiers.*.max'  => 'nullable|integer|min:0',
+                'fee_tiers.*.fee'  => 'nullable|integer|min:0',
             ]);
-            $base['default_fee'] = $extra['default_fee'];
-            $base['price']       = 0;
-            $base['cost_price']  = 0;
+            $base['default_fee']    = $extra['default_fee'];
+            $base['cash_direction'] = $extra['cash_direction'];
+            $base['fee_tiers']      = $this->normalizeTiers($extra['fee_tiers'] ?? []);
+            $base['price']          = 0;
+            $base['cost_price']     = 0;
         } else {
             $extra = $request->validate([
                 'price'      => 'required|integer|min:0',
                 'cost_price' => 'required|integer|min:0',
             ]);
-            $base['price']       = $extra['price'];
-            $base['cost_price']  = $extra['cost_price'];
-            $base['default_fee'] = 0;
+            $base['price']          = $extra['price'];
+            $base['cost_price']     = $extra['cost_price'];
+            $base['default_fee']    = 0;
+            $base['cash_direction'] = 'none';
+            $base['fee_tiers']      = null;
         }
 
         return $base;
+    }
+
+    /**
+     * Bersihkan & urutkan tarif bertingkat: buang baris kosong, urut menaik per batas.
+     */
+    private function normalizeTiers(array $tiers): ?array
+    {
+        $clean = collect($tiers)
+            ->map(fn ($t) => [
+                'max' => isset($t['max']) && $t['max'] !== '' && $t['max'] !== null ? (int) $t['max'] : null,
+                'fee' => (int) ($t['fee'] ?? 0),
+            ])
+            ->filter(fn ($t) => $t['fee'] > 0 || $t['max'] !== null)
+            ->sortBy(fn ($t) => $t['max'] ?? PHP_INT_MAX)
+            ->values()
+            ->all();
+
+        return empty($clean) ? null : $clean;
     }
 
     private function authorizeBranch(Service $service): void

@@ -7,6 +7,16 @@ $watch('darkMode', val => document.documentElement.classList.toggle('dark', val)
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login — {{ config('app.name', 'Ardi Ponsel') }}</title>
+
+    <script>
+        (function() {
+            try {
+                if (JSON.parse(localStorage.getItem('ap_dark'))) {
+                    document.documentElement.classList.add('dark');
+                }
+            } catch (e) {}
+        })();
+    </script>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 

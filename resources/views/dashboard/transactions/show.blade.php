@@ -12,6 +12,8 @@
         <span class="badge-success">Selesai</span>
     @elseif ($transaction->status === 'void')
         <span class="badge-danger">Batal</span>
+    @elseif ($transaction->status === 'return')
+        <span class="badge-neutral">Retur</span>
     @endif
 </div>
 

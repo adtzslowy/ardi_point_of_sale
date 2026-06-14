@@ -120,12 +120,24 @@
                 @forelse ($products as $product)
                     <tr>
                         <td>
-                            <p class="text-xs font-medium text-neutral-900 dark:text-neutral-100">
-                                {{ $product->name }}
-                            </p>
-                            @if ($product->sku)
-                                <p class="text-[10px] text-neutral-400 mt-0.5">{{ $product->sku }}</p>
-                            @endif
+                            <div class="flex items-center gap-2.5">
+                                @if ($product->image)
+                                    <img src="{{ $product->image_url }}" alt="{{ $product->name }}"
+                                         class="w-8 h-8 rounded-lg object-cover shrink-0 border border-neutral-200 dark:border-neutral-700">
+                                @else
+                                    <div class="w-8 h-8 rounded-lg shrink-0 bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center">
+                                        <x-heroicon-o-cube class="w-4 h-4 text-neutral-300 dark:text-neutral-600" />
+                                    </div>
+                                @endif
+                                <div class="min-w-0">
+                                    <p class="text-xs font-medium text-neutral-900 dark:text-neutral-100 truncate">
+                                        {{ $product->name }}
+                                    </p>
+                                    @if ($product->sku)
+                                        <p class="text-[10px] text-neutral-400 mt-0.5">{{ $product->sku }}</p>
+                                    @endif
+                                </div>
+                            </div>
                         </td>
                         <td class="text-xs text-neutral-500">
                             {{ $product->category?->name ?? '-' }}

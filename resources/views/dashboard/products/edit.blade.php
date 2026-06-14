@@ -13,10 +13,15 @@
         </h2>
     </div>
 
-    <form method="POST" action="{{ route('products.update', $product) }}" x-data="{
+    <form method="POST" action="{{ route('products.update', $product) }}" enctype="multipart/form-data" x-data="{
         price: {{ $product->price }},
         price_wholesale: {{ $product->price_wholesale }},
         cost_price: {{ $product->cost_price }},
+        imagePreview: '{{ $product->image_url ?? '' }}',
+        onImage(e) {
+            const f = e.target.files[0]
+            if (f) this.imagePreview = URL.createObjectURL(f)
+        },
         formatNum(val) {
             if (!val || val == 0) return ''
             return new Intl.NumberFormat('id-ID').format(val)
@@ -133,6 +138,39 @@
             </div>
 
             <div class="space-y-4">
+
+                {{-- Foto produk --}}
+                <div class="card space-y-3">
+                    <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">Foto produk</h3>
+
+                    <label class="block cursor-pointer">
+                        <div class="aspect-square rounded-xl border-2 border-dashed
+                                    border-neutral-200 dark:border-neutral-700
+                                    flex items-center justify-center overflow-hidden
+                                    hover:border-primary-400 dark:hover:border-primary-600 transition-colors">
+                            <template x-if="imagePreview">
+                                <img :src="imagePreview" class="w-full h-full object-cover" alt="Foto produk">
+                            </template>
+                            <template x-if="!imagePreview">
+                                <div class="text-center px-4">
+                                    <x-heroicon-o-photo class="w-8 h-8 mx-auto text-neutral-300 dark:text-neutral-600" />
+                                    <p class="text-[11px] text-neutral-400 mt-2">Klik untuk pilih foto</p>
+                                    <p class="text-[10px] text-neutral-400 mt-0.5">JPG/PNG/WEBP, maks 2 MB</p>
+                                </div>
+                            </template>
+                        </div>
+                        <input type="file" name="image" accept="image/*" @change="onImage($event)" class="hidden">
+                    </label>
+
+                    @error('image')
+                        <p class="text-xs text-red-500">{{ $message }}</p>
+                    @enderror
+
+                    <p class="text-[11px] text-amber-600 dark:text-amber-400 flex items-start gap-1">
+                        <x-heroicon-o-information-circle class="w-3.5 h-3.5 shrink-0 mt-px" />
+                        Khusus kategori <strong>aksesoris</strong>, foto produk wajib ada.
+                    </p>
+                </div>
 
                 <div class="card space-y-4">
                     <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">Stok</h3>

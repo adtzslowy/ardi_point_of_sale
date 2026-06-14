@@ -19,6 +19,8 @@ class Service extends Model
         'price',
         'cost_price',
         'default_fee',
+        'cash_direction',
+        'fee_tiers',
         'is_active',
         'note',
     ];
@@ -27,8 +29,45 @@ class Service extends Model
         'price'       => 'integer',
         'cost_price'  => 'integer',
         'default_fee' => 'integer',
+        'fee_tiers'   => 'array',
         'is_active'   => 'boolean',
     ];
+
+    /**
+     * Hitung biaya admin otomatis untuk sebuah nominal berdasarkan tarif bertingkat.
+     * Jatuh kembali ke default_fee bila belum ada tarif bertingkat.
+     */
+    public function feeForNominal(int $nominal): int
+    {
+        $tiers = collect($this->fee_tiers ?? [])
+            ->map(fn ($t) => [
+                'max' => isset($t['max']) && $t['max'] !== '' && $t['max'] !== null ? (int) $t['max'] : null,
+                'fee' => (int) ($t['fee'] ?? 0),
+            ])
+            ->sortBy(fn ($t) => $t['max'] ?? PHP_INT_MAX)
+            ->values();
+
+        if ($tiers->isEmpty()) {
+            return (int) $this->default_fee;
+        }
+
+        foreach ($tiers as $tier) {
+            if ($tier['max'] === null || $nominal <= $tier['max']) {
+                return $tier['fee'];
+            }
+        }
+
+        return $tiers->last()['fee'];
+    }
+
+    public function getCashDirectionLabelAttribute(): string
+    {
+        return match ($this->cash_direction) {
+            'tarik' => 'Tarik tunai (bank −, kas +)',
+            'setor' => 'Setor/transfer (bank +, kas −)',
+            default => 'Fee saja',
+        };
+    }
 
     public function branch(): BelongsTo   { return $this->belongsTo(Branche::class); }
     public function category(): BelongsTo { return $this->belongsTo(Category::class); }

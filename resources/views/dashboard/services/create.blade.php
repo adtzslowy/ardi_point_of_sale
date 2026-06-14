@@ -11,12 +11,19 @@
     <h2 class="text-sm font-medium text-neutral-900 dark:text-neutral-100">Tambah Jasa</h2>
 </div>
 
+@php
+    $oldTiers = old('fee_tiers', [['max' => '', 'fee' => '']]);
+@endphp
 <form method="POST" action="{{ route('services.store') }}"
       x-data="{
-          kind:       '{{ old('kind', 'servis') }}',
-          price:       {{ (int) old('price', 0) }},
-          cost_price:  {{ (int) old('cost_price', 0) }},
-          default_fee: {{ (int) old('default_fee', 0) }},
+          kind:           '{{ old('kind', 'servis') }}',
+          price:           {{ (int) old('price', 0) }},
+          cost_price:      {{ (int) old('cost_price', 0) }},
+          default_fee:     {{ (int) old('default_fee', 0) }},
+          cash_direction: '{{ old('cash_direction', 'none') }}',
+          tiers:           {{ Js::from($oldTiers) }},
+          addTier() { this.tiers.push({ max: '', fee: '' }) },
+          removeTier(i) { this.tiers.splice(i, 1); if (this.tiers.length === 0) this.addTier() },
           formatNum(val) {
               if (!val || val == 0) return ''
               return new Intl.NumberFormat('id-ID').format(val)
@@ -179,10 +186,27 @@
             </div>
         </div>
 
-        {{-- Fee (keuangan) --}}
-        <div class="card space-y-4" x-show="kind === 'keuangan'">
-            <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">Biaya admin</h3>
-            <div>
+        {{-- Keuangan: arah dana + biaya admin --}}
+        <div class="card space-y-4" x-show="kind === 'keuangan'" x-cloak>
+            <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">Arah dana</h3>
+            <div class="space-y-2">
+                <template x-for="opt in [
+                    {v:'none',  t:'Fee saja',      d:'Tidak menggerakkan saldo. Cuma catat fee (token, voucher, dll).'},
+                    {v:'tarik', t:'Tarik tunai',   d:'Saldo bank turun, kas fisik naik. (pelanggan ambil tunai)'},
+                    {v:'setor', t:'Setor / transfer', d:'Saldo bank naik, kas fisik turun. (kirim uang / setor)'}
+                ]" :key="opt.v">
+                    <label class="flex items-start gap-2.5 p-3 rounded-xl cursor-pointer border transition-colors duration-150"
+                           :class="cash_direction === opt.v ? 'border-primary-400 bg-primary-50 dark:bg-primary-900/20' : 'border-neutral-200 dark:border-neutral-700'">
+                        <input type="radio" name="cash_direction" :value="opt.v" x-model="cash_direction" class="mt-0.5 accent-primary-600">
+                        <span>
+                            <span class="block text-xs font-medium text-neutral-900 dark:text-neutral-100" x-text="opt.t"></span>
+                            <span class="block text-[11px] text-neutral-500 mt-0.5" x-text="opt.d"></span>
+                        </span>
+                    </label>
+                </template>
+            </div>
+
+            <div class="pt-2 border-t border-neutral-100 dark:border-neutral-800">
                 <label class="label">Fee default (Rp)</label>
                 <div class="relative">
                     <span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-neutral-500 pointer-events-none">Rp</span>
@@ -192,8 +216,49 @@
                     <input type="hidden" name="default_fee" :value="default_fee">
                 </div>
                 <p class="text-[11px] text-neutral-400 mt-1">
-                    Nilai awal saat mencatat transaksi (masih bisa diubah per transaksi).
+                    Dipakai bila tarif bertingkat di bawah kosong.
                 </p>
+            </div>
+
+            {{-- Tarif bertingkat per nominal --}}
+            <div class="pt-2 border-t border-neutral-100 dark:border-neutral-800 space-y-2">
+                <div class="flex items-center justify-between">
+                    <label class="label !mb-0">Biaya admin otomatis (per nominal)</label>
+                    <button type="button" @click="addTier()"
+                            class="inline-flex items-center gap-1 text-[11px] font-medium text-primary-600 dark:text-primary-400 hover:underline">
+                        <x-heroicon-o-plus class="w-3 h-3" /> Tambah tingkat
+                    </button>
+                </div>
+                <p class="text-[11px] text-neutral-400">
+                    Saat kasir mengetik nominal, fee terisi otomatis. Kosongkan kolom "s/d nominal" untuk tingkat paling atas (tak terbatas).
+                </p>
+
+                <template x-for="(t, i) in tiers" :key="i">
+                    <div class="flex items-center gap-2">
+                        <div class="flex-1">
+                            <div class="relative">
+                                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-neutral-400 pointer-events-none">s/d</span>
+                                <input type="text" :name="'fee_tiers['+i+'][max]'"
+                                       :value="t.max ? formatNum(t.max) : ''"
+                                       @input="t.max = parseInt($event.target.value.replace(/\D/g,'')) || ''"
+                                       class="input !py-1.5 text-xs pl-8" placeholder="nominal (kosong = ∞)">
+                            </div>
+                        </div>
+                        <span class="text-neutral-400 text-xs">→ fee</span>
+                        <div class="w-28">
+                            <div class="relative">
+                                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-neutral-400 pointer-events-none">Rp</span>
+                                <input type="text" :name="'fee_tiers['+i+'][fee]'"
+                                       :value="t.fee ? formatNum(t.fee) : ''"
+                                       @input="t.fee = parseInt($event.target.value.replace(/\D/g,'')) || ''"
+                                       class="input !py-1.5 text-xs pl-7" placeholder="0">
+                            </div>
+                        </div>
+                        <button type="button" @click="removeTier(i)" class="text-neutral-400 hover:text-red-500">
+                            <x-heroicon-o-trash class="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                </template>
             </div>
         </div>
 

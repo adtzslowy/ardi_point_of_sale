@@ -12,20 +12,26 @@
 
       protected $fillable = [
           'transaction_id', 'item_type', 'item_id', 'item_name',
-          'unit_price', 'cost_price', 'nominal', 'qty', 'subtotal', 'profit',
+          'unit_price', 'cost_price', 'nominal', 'qty', 'returned_qty', 'subtotal', 'profit',
       ];
 
       protected $casts = [
-          'unit_price' => 'integer',
-          'cost_price' => 'integer',
-          'nominal'    => 'integer',
-          'qty'        => 'integer',
-          'subtotal'   => 'integer',
-          'profit'     => 'integer',
+          'unit_price'   => 'integer',
+          'cost_price'   => 'integer',
+          'nominal'      => 'integer',
+          'qty'          => 'integer',
+          'returned_qty' => 'integer',
+          'subtotal'     => 'integer',
+          'profit'       => 'integer',
       ];
 
       public function transaction(): BelongsTo
       {
           return $this->belongsTo(Transaction::class);
+      }
+
+      public function getReturnableQtyAttribute(): int
+      {
+          return max($this->qty - $this->returned_qty, 0);
       }
   }

@@ -7,6 +7,8 @@ use App\Models\Category;
 use App\Models\Product;
 use App\Models\StockMovement;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 
 class ProductController extends Controller
 {
@@ -55,6 +57,7 @@ class ProductController extends Controller
             'name'            => 'required|string|max:255',
             'sku'             => 'nullable|string|max:50',
             'category_id'     => 'nullable|exists:categories,id',
+            'image'           => 'nullable|image|mimes:jpeg,jpg,png,webp|max:2048',
             'price'           => 'required|integer|min:0',
             'price_wholesale' => 'required|integer|min:0',
             'cost_price'      => 'required|integer|min:0',
@@ -63,8 +66,30 @@ class ProductController extends Controller
             'note'            => 'nullable|string|max:500',
         ]);
 
-        $data['branch_id'] = auth()->user()->active_branch_id;
-        $product           = Product::create($data);
+        $branchId = auth()->user()->active_branch_id;
+        $category = $this->resolveCategory($data['category_id'] ?? null, $branchId);
+
+        // Kategori aksesoris wajib ada foto produk
+        if ($this->requiresPhoto($category) && !$request->hasFile('image')) {
+            throw ValidationException::withMessages([
+                'image' => 'Foto produk wajib diisi untuk kategori aksesoris.',
+            ]);
+        }
+
+        $data['branch_id'] = $branchId;
+
+        // SKU otomatis bila tidak diisi manual
+        if (empty($data['sku'])) {
+            $data['sku'] = Product::generateSku($branchId, $category);
+        }
+
+        if ($request->hasFile('image')) {
+            $data['image'] = $request->file('image')->store('products', 'public');
+        } else {
+            unset($data['image']);
+        }
+
+        $product = Product::create($data);
 
         if ($data['stock'] > 0) {
             StockMovement::create([
@@ -110,6 +135,7 @@ class ProductController extends Controller
             'name'            => 'required|string|max:255',
             'sku'             => 'nullable|string|max:50',
             'category_id'     => 'nullable|exists:categories,id',
+            'image'           => 'nullable|image|mimes:jpeg,jpg,png,webp|max:2048',
             'price'           => 'required|integer|min:0',
             'price_wholesale' => 'required|integer|min:0',
             'cost_price'      => 'required|integer|min:0',
@@ -117,6 +143,28 @@ class ProductController extends Controller
             'is_active'       => 'boolean',
             'note'            => 'nullable|string|max:500',
         ]);
+
+        $category = $this->resolveCategory($data['category_id'] ?? null, $product->branch_id);
+
+        // Kategori aksesoris wajib ada foto (kecuali sudah punya foto lama)
+        if ($this->requiresPhoto($category) && !$request->hasFile('image') && !$product->image) {
+            throw ValidationException::withMessages([
+                'image' => 'Foto produk wajib diisi untuk kategori aksesoris.',
+            ]);
+        }
+
+        if (empty($data['sku'])) {
+            $data['sku'] = $product->sku ?: Product::generateSku($product->branch_id, $category);
+        }
+
+        if ($request->hasFile('image')) {
+            if ($product->image) {
+                Storage::disk('public')->delete($product->image);
+            }
+            $data['image'] = $request->file('image')->store('products', 'public');
+        } else {
+            unset($data['image']);
+        }
 
         $product->update($data);
         ActivityLog::log('updated', $product, $before, $product->fresh()->toArray());
@@ -178,5 +226,18 @@ class ProductController extends Controller
         if ($product->branch_id !== auth()->user()->active_branch_id) {
             abort(403);
         }
+    }
+
+    private function resolveCategory(?string $categoryId, string $branchId): ?Category
+    {
+        if (!$categoryId) {
+            return null;
+        }
+        return Category::forBranch($branchId)->find($categoryId);
+    }
+
+    private function requiresPhoto(?Category $category): bool
+    {
+        return $category && str_contains(strtolower($category->name), 'aksesoris');
     }
 }
