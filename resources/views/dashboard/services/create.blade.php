@@ -21,6 +21,7 @@
           cost_price:      {{ (int) old('cost_price', 0) }},
           default_fee:     {{ (int) old('default_fee', 0) }},
           cash_direction: '{{ old('cash_direction', 'none') }}',
+          rita_balance:    {{ (int) old('rita_balance', 0) }},
           tiers:           {{ Js::from($oldTiers) }},
           addTier() { this.tiers.push({ max: '', fee: '' }) },
           removeTier(i) { this.tiers.splice(i, 1); if (this.tiers.length === 0) this.addTier() },
@@ -32,12 +33,12 @@
       }">
     @csrf
 
-    <div class="max-w-2xl space-y-4">
+    <div class="space-y-4">
 
         {{-- Jenis jasa --}}
         <div class="card space-y-3">
             <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">Jenis jasa</h3>
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label class="flex items-start gap-2.5 p-3 rounded-xl cursor-pointer border
                               transition-colors duration-150"
                        :class="kind === 'servis'
@@ -60,6 +61,30 @@
                     <span>
                         <span class="block text-xs font-medium text-neutral-900 dark:text-neutral-100">Jasa keuangan</span>
                         <span class="block text-[11px] text-neutral-500 mt-0.5">Nominal + fee (tarik tunai, transfer, token)</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2.5 p-3 rounded-xl cursor-pointer border
+                              transition-colors duration-150"
+                       :class="kind === 'eceran'
+                           ? 'border-primary-400 bg-primary-50 dark:bg-primary-900/20'
+                           : 'border-neutral-200 dark:border-neutral-700'">
+                    <input type="radio" name="kind" value="eceran" x-model="kind"
+                           class="mt-0.5 accent-primary-600">
+                    <span>
+                        <span class="block text-xs font-medium text-neutral-900 dark:text-neutral-100">Eceran</span>
+                        <span class="block text-[11px] text-neutral-500 mt-0.5">Harga jual &amp; modal diketik saat transaksi (Pertalite/BBM)</span>
+                    </span>
+                </label>
+                <label class="flex items-start gap-2.5 p-3 rounded-xl cursor-pointer border
+                              transition-colors duration-150"
+                       :class="kind === 'rita'
+                           ? 'border-primary-400 bg-primary-50 dark:bg-primary-900/20'
+                           : 'border-neutral-200 dark:border-neutral-700'">
+                    <input type="radio" name="kind" value="rita" x-model="kind"
+                           class="mt-0.5 accent-primary-600">
+                    <span>
+                        <span class="block text-xs font-medium text-neutral-900 dark:text-neutral-100">Rita</span>
+                        <span class="block text-[11px] text-neutral-500 mt-0.5">Nembak voucher — saldo deposit + stok produk</span>
                     </span>
                 </label>
             </div>
@@ -262,6 +287,52 @@
             </div>
         </div>
 
+        {{-- Eceran: info harga diisi saat transaksi --}}
+        <div class="card" x-show="kind === 'eceran'" x-cloak>
+            <div class="flex items-start gap-3 text-xs text-neutral-600 dark:text-neutral-300">
+                <x-heroicon-o-information-circle class="w-4 h-4 shrink-0 text-primary-500 mt-0.5" />
+                <p>
+                    Harga jual &amp; harga modal <strong>tidak disetel di sini</strong>.
+                    Kasir mengetiknya tiap transaksi saat menekan <strong>Catat</strong>,
+                    dan profit dihitung otomatis (harga jual − modal).
+                </p>
+            </div>
+        </div>
+
+        {{-- Rita: produk voucher terkait + saldo deposit --}}
+        <div class="card space-y-4" x-show="kind === 'rita'" x-cloak>
+            <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">Pengaturan Rita</h3>
+
+            <div>
+                <label class="label">Produk voucher terkait <span class="text-red-500">*</span></label>
+                <select name="product_id" class="select w-full @error('product_id') border-red-400 @enderror">
+                    <option value="">-- Pilih produk voucher --</option>
+                    @foreach ($products as $product)
+                        <option value="{{ $product->id }}" {{ old('product_id') === $product->id ? 'selected' : '' }}>
+                            {{ $product->name }} (stok {{ $product->stock }})
+                        </option>
+                    @endforeach
+                </select>
+                <p class="text-[11px] text-neutral-400 mt-1">Stok produk ini berkurang tiap nembak voucher.</p>
+                @error('product_id')<p class="text-xs text-red-500 mt-1">{{ $message }}</p>@enderror
+            </div>
+
+            <div>
+                <label class="label">Saldo Rita / deposit (Rp)</label>
+                <div class="relative">
+                    <span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-neutral-500 pointer-events-none">Rp</span>
+                    <input type="text" :value="formatNum(rita_balance)"
+                           @input="rita_balance = parseInt($event.target.value.replace(/\D/g,'')) || 0"
+                           class="input pl-9" placeholder="0">
+                    <input type="hidden" name="rita_balance" :value="rita_balance">
+                </div>
+                <p class="text-[11px] text-neutral-400 mt-1">
+                    Saldo deposit berkurang sebesar modal tiap transaksi. Top-up saldo lewat Edit layanan.
+                </p>
+            </div>
+        </div>
+
+        {{-- Pengaturan --}}
         <div class="card space-y-3">
             <h3 class="text-xs font-medium text-neutral-900 dark:text-neutral-100">Pengaturan</h3>
             <label class="flex items-center gap-2.5 cursor-pointer">
@@ -271,12 +342,10 @@
             </label>
         </div>
 
-        <div class="flex gap-2">
-            <button type="submit" class="btn-primary justify-center">
-                <x-heroicon-o-check class="w-4 h-4" />
-                Simpan jasa
-            </button>
-        </div>
+        <button type="submit" class="btn-primary justify-center w-full">
+            <x-heroicon-o-check class="w-4 h-4" />
+            Simpan jasa
+        </button>
     </div>
 </form>
 

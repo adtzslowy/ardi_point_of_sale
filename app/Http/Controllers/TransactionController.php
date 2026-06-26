@@ -205,6 +205,26 @@ class TransactionController extends Controller
         DB::transaction(function () use ($request, $transaction) {
             $before = $transaction->toArray();
             foreach ($transaction->items as $item) {
+                // Rita: kembalikan saldo deposit (modal) & stok produk voucher (jumlah = nominal).
+                if ($item->item_type === 'service') {
+                    $service = Service::withTrashed()->find($item->item_id);
+                    if ($service && $service->kind === 'rita') {
+                        $service->increment('rita_balance', (int) $item->cost_price);
+                        if ($service->product_id && $item->nominal) {
+                            $product = Product::find($service->product_id);
+                            if ($product) {
+                                $sb = $product->stock; $sa = $sb + (int) $item->nominal;
+                                $product->update(['stock' => $sa]);
+                                StockMovement::create([
+                                    'branch_id' => $transaction->branch_id, 'product_id' => $product->id, 'user_id' => auth()->id(),
+                                    'type' => 'in', 'qty_before' => $sb, 'qty_change' => (int) $item->nominal, 'qty_after' => $sa,
+                                    'reference' => 'VOID-' . $transaction->trx_number, 'note' => 'Pembatalan Rita',
+                                ]);
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if ($item->item_type !== 'product') continue;
                 $product = Product::find($item->item_id);
                 if (!$product) continue;
@@ -241,6 +261,10 @@ class TransactionController extends Controller
             }
 
             $transaction->update(['status' => 'void', 'void_reason' => $request->void_reason]);
+
+            // Hitung ulang ringkasan shift agar kas/penjualan tak lagi memuat transaksi batal.
+            $transaction->shift?->recalculate();
+
             ActivityLog::log('voided', $transaction, $before, $transaction->fresh()->toArray());
         });
 
@@ -356,6 +380,8 @@ class TransactionController extends Controller
                     ->every(fn ($i) => $i->returned_qty >= $i->qty);
                 if ($allReturned) {
                     $transaction->update(['status' => 'return']);
+                    // Hitung ulang ringkasan shift: transaksi yang diretur penuh tak lagi dihitung.
+                    $transaction->shift?->recalculate();
                 }
 
                 ActivityLog::log('returned', $return, null, $return->toArray());

@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use App\Models\ActivityLog;
 use App\Models\Bank;
 use App\Models\Category;
+use App\Models\Product;
 use App\Models\Service;
 use App\Models\Shift;
+use App\Models\StockMovement;
 use App\Models\Transaction;
 use App\Models\TransactionItem;
 use Illuminate\Http\Request;
@@ -18,27 +20,34 @@ class ServiceController extends Controller
     {
         $branchId = auth()->user()->active_branch_id;
 
-        $services = Service::with('category')
+        $services = Service::with('category', 'product')
             ->forBranch($branchId)
+            ->active()
             ->when($request->search, fn($q) =>
                 $q->where('name', 'like', "%{$request->search}%")
             )
-            ->when(in_array($request->kind, ['servis', 'keuangan']), fn($q) =>
-                $q->kind($request->kind)
-            )
-            ->when($request->category, fn($q) =>
-                $q->where('category_id', $request->category)
-            )
-            ->when($request->status === 'inactive', fn($q) => $q->where('is_active', false))
-            ->when(!$request->status || $request->status === 'active', fn($q) => $q->active())
             ->orderBy('name')
-            ->paginate(20)
-            ->withQueryString();
+            ->get();
 
-        $categories  = Category::forBranch($branchId)->service()->active()->orderBy('name')->get();
-        $servisCount = Service::forBranch($branchId)->active()->kind('servis')->count();
-        $financeCount = Service::forBranch($branchId)->active()->kind('keuangan')->count();
-        $activeShift = Shift::forBranch($branchId)->open()->latest()->first();
+        // Kategori layanan diurutkan sesuai sort_order (PPOB, Bank, E-Wallet, dst).
+        $categories = Category::forBranch($branchId)->service()->active()
+            ->orderBy('sort_order')->orderBy('name')->get();
+
+        // Kelompokkan layanan per kategori; hanya tampilkan kategori yang ada isinya.
+        $groups = $categories
+            ->map(fn ($cat) => [
+                'category' => $cat,
+                'items'    => $services->where('category_id', $cat->id)->values(),
+            ])
+            ->filter(fn ($g) => $g['items']->isNotEmpty())
+            ->values();
+
+        // Layanan tanpa kategori dikumpulkan terpisah.
+        $uncategorized = $services->whereNull('category_id')->values();
+
+        $servisCount  = $services->where('kind', 'servis')->count();
+        $financeCount = $services->where('kind', 'keuangan')->count();
+        $activeShift  = Shift::forBranch($branchId)->open()->latest()->first();
 
         $bankAccounts = Bank::forBranch($branchId)->active()
             ->orderBy('type')->orderBy('bank_name')->get()
@@ -50,7 +59,7 @@ class ServiceController extends Controller
             ]);
 
         return view('dashboard.services.index', compact(
-            'services', 'categories', 'servisCount', 'financeCount', 'activeShift', 'bankAccounts'
+            'groups', 'uncategorized', 'servisCount', 'financeCount', 'activeShift', 'bankAccounts'
         ));
     }
 
@@ -58,7 +67,8 @@ class ServiceController extends Controller
     {
         $branchId   = auth()->user()->active_branch_id;
         $categories = Category::forBranch($branchId)->service()->active()->orderBy('name')->get();
-        return view('dashboard.services.create', compact('categories'));
+        $products   = Product::forBranch($branchId)->active()->orderBy('name')->get();
+        return view('dashboard.services.create', compact('categories', 'products'));
     }
 
     public function store(Request $request)
@@ -77,7 +87,8 @@ class ServiceController extends Controller
     {
         $this->authorizeBranch($service);
         $categories = Category::forBranch($service->branch_id)->service()->active()->orderBy('name')->get();
-        return view('dashboard.services.edit', compact('service', 'categories'));
+        $products   = Product::forBranch($service->branch_id)->active()->orderBy('name')->get();
+        return view('dashboard.services.edit', compact('service', 'categories', 'products'));
     }
 
     public function update(Request $request, Service $service)
@@ -126,20 +137,65 @@ class ServiceController extends Controller
                 $rules['bank_account_id'] = 'required|exists:bank_accounts,id';
             } else {
                 $rules['payment_method'] = 'required|in:cash,transfer';
+                $rules['bank_account_id'] = 'nullable|exists:bank_accounts,id';
             }
             $data = $request->validate($rules);
 
+            $qty     = 1;
+            $nominal = (int) $data['nominal'];
+            $fee     = (int) $data['fee'];
+
+            if ($movesCash) {
+                // Tarik/setor: nilai transaksi = fee; pergerakan nominal dihitung khusus di bawah.
+                $unit     = $fee;
+                $subtotal = $fee;
+                $profit   = $fee;
+                $cost     = 0;
+            } else {
+                // Fee-saja (pulsa, tagihan PLN, token): pelanggan bayar nominal + fee.
+                $unit     = $nominal + $fee;   // total yang diserahkan pelanggan
+                $subtotal = $unit;
+                $profit   = $fee;              // profit konter = fee
+                $cost     = $nominal;          // nominal = modal / harga beli
+            }
+        } elseif ($service->kind === 'rita') {
+            // Rita: kasir input jumlah voucher + modal total + harga total. Profit = harga - modal.
+            $data = $request->validate([
+                'qty'             => 'required|integer|min:1',
+                'price'           => 'required|integer|min:1',   // harga total
+                'cost_price'      => 'required|integer|min:0',   // modal total
+                'payment_method'  => 'required|in:cash,transfer',
+                'bank_account_id' => 'nullable|exists:bank_accounts,id',
+                'note'            => 'nullable|string|max:500',
+            ]);
+            $voucherQty = (int) $data['qty'];
+            $qty        = 1;                       // 1 baris transaksi (batch)
+            $unit       = (int) $data['price'];    // harga total
+            $cost       = (int) $data['cost_price']; // modal total
+            $subtotal   = $unit;
+            $profit     = $unit - $cost;
+            $nominal    = $voucherQty;             // simpan jumlah voucher untuk void/stok
+        } elseif ($service->kind === 'eceran') {
+            // Harga jual & modal diketik kasir; profit = jual - modal.
+            $data = $request->validate([
+                'price'           => 'required|integer|min:1',
+                'cost_price'      => 'required|integer|min:0',
+                'payment_method'  => 'required|in:cash,transfer',
+                'bank_account_id' => 'nullable|exists:bank_accounts,id',
+                'note'            => 'nullable|string|max:500',
+            ]);
             $qty      = 1;
-            $unit     = (int) $data['fee'];      // fee = pendapatan konter
+            $unit     = (int) $data['price'];
+            $cost     = (int) $data['cost_price'];
             $subtotal = $unit;
-            $profit   = $unit;
-            $nominal  = (int) $data['nominal'];
-            $cost     = 0;
+            $profit   = $unit - $cost;
+            $nominal  = null;
         } else {
             $data = $request->validate([
-                'qty'            => 'required|integer|min:1',
-                'payment_method' => 'required|in:cash,transfer',
-                'note'           => 'nullable|string|max:500',
+                'qty'             => 'required|integer|min:1',
+                'payment_method'  => 'required|in:cash,transfer',
+                'bank_account_id' => 'nullable|exists:bank_accounts,id',
+                'note'            => 'nullable|string|max:500',
             ]);
             $qty      = (int) $data['qty'];
             $unit     = (int) $service->price;
@@ -163,6 +219,18 @@ class ServiceController extends Controller
                 $paidTransfer  = $method === 'transfer' ? $subtotal : 0;
                 $bankAccount   = null;
 
+                // Transfer biasa (servis / keuangan fee / eceran): wajib pilih rekening tujuan.
+                if (!$movesCash && $method === 'transfer' && $paidTransfer > 0) {
+                    if (empty($data['bank_account_id'])) {
+                        throw new \RuntimeException('Pilih rekening tujuan transfer (bank / e-wallet).');
+                    }
+                    $bankAccount = Bank::forBranch($branchId)->active()
+                        ->lockForUpdate()->find($data['bank_account_id']);
+                    if (!$bankAccount) {
+                        throw new \RuntimeException('Rekening tujuan transfer tidak valid atau tidak aktif.');
+                    }
+                }
+
                 if ($movesCash) {
                     // Jasa keuangan yang menggerakkan nominal (tarik / setor)
                     $bankAccount = Bank::forBranch($branchId)->active()
@@ -178,6 +246,23 @@ class ServiceController extends Controller
                         $paidCash = $nominal + $subtotal;   // kas naik: terima tunai nominal + fee
                     } else { // setor
                         $paidCash = $subtotal - $nominal;   // kas turun: keluarkan tunai nominal, terima fee
+                    }
+                }
+
+                // Rita: kunci & validasi saldo deposit + stok produk voucher.
+                $ritaService = null;
+                $ritaProduct = null;
+                if ($service->kind === 'rita') {
+                    $ritaService = Service::lockForUpdate()->find($service->id);
+                    if ((int) $ritaService->rita_balance < $cost) {
+                        throw new \RuntimeException('Saldo Rita tidak cukup untuk modal ini.');
+                    }
+                    $ritaProduct = Product::forBranch($branchId)->lockForUpdate()->find($ritaService->product_id);
+                    if (!$ritaProduct) {
+                        throw new \RuntimeException('Produk voucher Rita tidak ditemukan.');
+                    }
+                    if ($ritaProduct->stock < $nominal) {
+                        throw new \RuntimeException("Stok voucher tidak cukup (tersisa {$ritaProduct->stock}).");
                     }
                 }
 
@@ -214,10 +299,35 @@ class ServiceController extends Controller
                     'profit'         => $profit,
                 ]);
 
-                // Gerakkan saldo bank sesuai arah dana
-                if ($bankAccount) {
+                // Jasa keuangan tarik/setor: gerakkan saldo bank sesuai arah dana (nominal).
+                if ($bankAccount && $movesCash) {
                     $mutType = $service->cash_direction === 'tarik' ? 'out' : 'in';
                     $bankAccount->applyMutation($mutType, $nominal, "{$service->name} {$trxNumber}");
+                }
+
+                // Transfer biasa: uang masuk ke rekening tujuan sebesar total.
+                if ($bankAccount && !$movesCash && $paidTransfer > 0) {
+                    $bankAccount->applyMutation('in', $paidTransfer, "{$service->name} {$trxNumber}");
+                }
+
+                // Rita: kurangi saldo deposit (sebesar modal) & stok produk voucher (sebanyak qty).
+                if ($service->kind === 'rita') {
+                    $ritaService->decrement('rita_balance', $cost);
+
+                    $before = $ritaProduct->stock;
+                    $after  = $before - $nominal;
+                    $ritaProduct->update(['stock' => $after]);
+                    StockMovement::create([
+                        'branch_id'  => $branchId,
+                        'product_id' => $ritaProduct->id,
+                        'user_id'    => auth()->id(),
+                        'type'       => 'out',
+                        'qty_before' => $before,
+                        'qty_change' => -$nominal,
+                        'qty_after'  => $after,
+                        'reference'  => $trxNumber,
+                        'note'       => 'Nembak voucher (Rita)',
+                    ]);
                 }
 
                 $activeShift->recalculate();
@@ -238,13 +348,37 @@ class ServiceController extends Controller
     {
         $base = $request->validate([
             'name'        => 'required|string|max:255',
-            'kind'        => 'required|in:servis,keuangan',
+            'kind'        => 'required|in:servis,keuangan,eceran,rita',
             'category_id' => 'nullable|exists:categories,id',
             'is_active'   => 'boolean',
             'note'        => 'nullable|string|max:500',
         ]);
 
-        if ($base['kind'] === 'keuangan') {
+        if ($base['kind'] === 'rita') {
+            // Rita: terikat 1 produk voucher + punya saldo deposit. Harga/modal diketik saat transaksi.
+            $branchId = auth()->user()->active_branch_id;
+            $extra = $request->validate([
+                'product_id'   => [
+                    'required',
+                    \Illuminate\Validation\Rule::exists('products', 'id')->where('branch_id', $branchId),
+                ],
+                'rita_balance' => 'required|integer|min:0',
+            ]);
+            $base['product_id']     = $extra['product_id'];
+            $base['rita_balance']   = $extra['rita_balance'];
+            $base['price']          = 0;
+            $base['cost_price']     = 0;
+            $base['default_fee']    = 0;
+            $base['cash_direction'] = 'none';
+            $base['fee_tiers']      = null;
+        } elseif ($base['kind'] === 'eceran') {
+            // Harga jual & modal tidak disetel di master; diketik kasir saat transaksi.
+            $base['price']          = 0;
+            $base['cost_price']     = 0;
+            $base['default_fee']    = 0;
+            $base['cash_direction'] = 'none';
+            $base['fee_tiers']      = null;
+        } elseif ($base['kind'] === 'keuangan') {
             $extra = $request->validate([
                 'default_fee'      => 'required|integer|min:0',
                 'cash_direction'   => 'required|in:none,tarik,setor',
@@ -267,6 +401,12 @@ class ServiceController extends Controller
             $base['default_fee']    = 0;
             $base['cash_direction'] = 'none';
             $base['fee_tiers']      = null;
+        }
+
+        // Field khusus Rita hanya berlaku untuk kind rita.
+        if ($base['kind'] !== 'rita') {
+            $base['product_id']   = null;
+            $base['rita_balance'] = 0;
         }
 
         return $base;

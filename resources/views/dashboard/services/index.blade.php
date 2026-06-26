@@ -6,9 +6,11 @@
 <div
     x-data="{
         open: false,
-        svc: { id: '', name: '', kind: 'servis', price: 0, default_fee: 0, cash_direction: 'none', fee_tiers: [] },
+        svc: { id: '', name: '', kind: 'servis', price: 0, default_fee: 0, cash_direction: 'none', fee_tiers: [], rita_balance: 0, product_stock: 0, product_name: '' },
         nominal: 0,
         fee: 0,
+        sell_price: 0,
+        cost: 0,
         qty: 1,
         payment_method: 'cash',
         bank_account_id: '',
@@ -23,6 +25,8 @@
             this.svc = { cash_direction: 'none', fee_tiers: [], ...svc }
             this.nominal = 0
             this.fee = svc.default_fee || 0
+            this.sell_price = 0
+            this.cost = 0
             this.qty = 1
             this.payment_method = 'cash'
             this.bank_account_id = ''
@@ -50,13 +54,29 @@
                 if (!this.nominal || this.nominal < 1) return false
                 if (this.movesCash && !this.bank_account_id) return false
             }
+            if (this.svc.kind === 'eceran') {
+                if (!this.sell_price || this.sell_price < 1) return false
+            }
+            if (this.svc.kind === 'rita') {
+                if (!this.sell_price || this.sell_price < 1) return false
+                if (!this.qty || this.qty < 1) return false
+                if (this.qty > (this.svc.product_stock || 0)) return false
+                if (this.cost > (this.svc.rita_balance || 0)) return false
+            }
+            if (this.payment_method === 'transfer' && !this.movesCash && !this.bank_account_id) return false
             return true
         },
         get action() {
             return this.sellTemplate.replace('__ID__', this.svc.id)
         },
+        get eceranProfit() {
+            return this.sell_price - this.cost
+        },
         get total() {
-            return this.svc.kind === 'keuangan' ? this.fee : (this.svc.price * this.qty)
+            if (this.svc.kind === 'keuangan') return this.movesCash ? this.fee : (this.nominal + this.fee)
+            if (this.svc.kind === 'eceran') return this.sell_price * this.qty
+            if (this.svc.kind === 'rita') return this.sell_price
+            return this.svc.price * this.qty
         }
     }"
     @keydown.escape.window="open = false"
@@ -111,116 +131,60 @@
     </div>
 </div>
 
-{{-- Filter & tabel --}}
-<div class="card p-0 overflow-hidden">
+{{-- Pencarian --}}
+<form method="GET" action="{{ route('services.index') }}" class="flex items-center gap-2 mb-5">
+    <input type="text" name="search" value="{{ request('search') }}"
+           placeholder="Cari layanan..." class="input !w-56 !py-1.5 text-xs">
+    <button type="submit" class="btn-primary !py-1.5 !text-xs">Cari</button>
+    @if (request('search'))
+        <a href="{{ route('services.index') }}" class="btn-secondary !py-1.5 !text-xs">Reset</a>
+    @endif
+</form>
 
-    <form method="GET" action="{{ route('services.index') }}"
-          class="flex flex-wrap items-center gap-2 px-4 py-3
-                 border-b border-neutral-200 dark:border-neutral-800">
-        <input type="text" name="search" value="{{ request('search') }}"
-               placeholder="Cari nama jasa..." class="input !w-44 !py-1.5 text-xs">
-        <select name="kind" class="select !w-40 !py-1.5 text-xs">
-            <option value="">Semua jenis</option>
-            <option value="servis"   {{ request('kind') === 'servis'   ? 'selected' : '' }}>Jasa servis</option>
-            <option value="keuangan" {{ request('kind') === 'keuangan' ? 'selected' : '' }}>Jasa keuangan</option>
-        </select>
-        <select name="category" class="select !w-40 !py-1.5 text-xs">
-            <option value="">Semua kategori</option>
-            @foreach ($categories as $cat)
-                <option value="{{ $cat->id }}" {{ request('category') === $cat->id ? 'selected' : '' }}>
-                    {{ $cat->name }}
-                </option>
+{{-- Layanan digital --}}
+<div class="mb-3">
+    <h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+        Layanan Digital
+    </h3>
+</div>
+
+@forelse ($groups as $group)
+    @php($category = $group['category'])
+    <div class="card mb-4">
+        <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                {{ $category->name }}
+            </h4>
+            <span class="badge-neutral">{{ $group['items']->count() }}</span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+            @foreach ($group['items'] as $service)
+                @include('dashboard.services._item', ['service' => $service])
             @endforeach
-        </select>
-        <select name="status" class="select !w-32 !py-1.5 text-xs">
-            <option value="active"   {{ request('status', 'active') === 'active'   ? 'selected' : '' }}>Aktif</option>
-            <option value="inactive" {{ request('status') === 'inactive' ? 'selected' : '' }}>Nonaktif</option>
-        </select>
-        <button type="submit" class="btn-primary !py-1.5 !text-xs">Filter</button>
-        @if (request()->hasAny(['search', 'kind', 'category', 'status']))
-            <a href="{{ route('services.index') }}" class="btn-secondary !py-1.5 !text-xs">Reset</a>
-        @endif
-    </form>
-
-    <div class="overflow-x-auto">
-        <table class="table-base">
-            <thead>
-                <tr>
-                    <th>Jasa</th>
-                    <th>Jenis</th>
-                    <th>Kategori</th>
-                    <th class="text-right">Harga / Fee</th>
-                    <th class="text-center">Status</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                @forelse ($services as $service)
-                    <tr>
-                        <td>
-                            <p class="text-xs font-medium text-neutral-900 dark:text-neutral-100">
-                                {{ $service->name }}
-                            </p>
-                        </td>
-                        <td>
-                            @if ($service->kind === 'keuangan')
-                                <span class="badge-primary">Keuangan</span>
-                            @else
-                                <span class="badge-neutral">Servis</span>
-                            @endif
-                        </td>
-                        <td class="text-xs text-neutral-500">
-                            {{ $service->category?->name ?? '-' }}
-                        </td>
-                        <td class="text-right text-xs">
-                            @if ($service->kind === 'keuangan')
-                                <span class="text-neutral-500">Fee </span>
-                                Rp {{ number_format($service->default_fee, 0, ',', '.') }}
-                            @else
-                                Rp {{ number_format($service->price, 0, ',', '.') }}
-                            @endif
-                        </td>
-                        <td class="text-center">
-                            @if ($service->is_active)
-                                <span class="badge-primary">Aktif</span>
-                            @else
-                                <span class="badge-neutral">Nonaktif</span>
-                            @endif
-                        </td>
-                        <td class="text-right">
-                            <div class="flex items-center justify-end gap-2">
-                                @if ($service->is_active && $activeShift)
-                                    <button type="button"
-                                            @click="openSell({ id: '{{ $service->id }}', name: {{ Js::from($service->name) }}, kind: '{{ $service->kind }}', price: {{ (int) $service->price }}, default_fee: {{ (int) $service->default_fee }}, cash_direction: '{{ $service->cash_direction ?? 'none' }}', fee_tiers: {{ Js::from($service->fee_tiers ?? []) }} })"
-                                            class="text-xs text-primary-600 dark:text-primary-400 hover:underline">
-                                        Catat
-                                    </button>
-                                @endif
-                                <a href="{{ route('services.edit', $service) }}"
-                                   class="text-xs text-neutral-500 hover:text-neutral-700
-                                          dark:text-neutral-400 dark:hover:text-neutral-200">
-                                    Edit
-                                </a>
-                            </div>
-                        </td>
-                    </tr>
-                @empty
-                    <tr>
-                        <td colspan="6" class="py-10 text-center text-xs text-neutral-400">
-                            Belum ada jasa
-                        </td>
-                    </tr>
-                @endforelse
-            </tbody>
-        </table>
+        </div>
     </div>
-
-    @if ($services->hasPages())
-        <div class="px-4 py-3 border-t border-neutral-200 dark:border-neutral-800">
-            {{ $services->links() }}
+@empty
+    @if ($uncategorized->isEmpty())
+        <div class="card py-12 text-center">
+            <p class="text-xs text-neutral-400">Belum ada layanan. Tambahkan lewat tombol di atas.</p>
         </div>
     @endif
-</div>
+@endforelse
+
+{{-- Layanan tanpa kategori --}}
+@if ($uncategorized->isNotEmpty())
+    <div class="card mb-4">
+        <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-semibold text-neutral-900 dark:text-neutral-100">Lainnya</h4>
+            <span class="badge-neutral">{{ $uncategorized->count() }}</span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+            @foreach ($uncategorized as $service)
+                @include('dashboard.services._item', ['service' => $service])
+            @endforeach
+        </div>
+    </div>
+@endif
 
 {{-- Modal catat jasa --}}
 <div x-cloak x-show="open"
@@ -311,6 +275,95 @@
                 </div>
             </template>
 
+            {{-- Eceran: harga jual + modal --}}
+            <template x-if="svc.kind === 'eceran'">
+                <div class="space-y-3">
+                    <div>
+                        <label class="label">Harga jual (Rp)</label>
+                        <div class="relative">
+                            <span class="absolute left-3 top-1/2 -translate-y-1/2
+                                         text-sm text-neutral-500 pointer-events-none">Rp</span>
+                            <input type="text" :value="formatNum(sell_price)"
+                                   @input="sell_price = parseInt($event.target.value.replace(/\D/g,'')) || 0"
+                                   class="input pl-9" placeholder="mis: 20.000">
+                            <input type="hidden" name="price" :value="sell_price">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="label">Harga modal (Rp)</label>
+                        <div class="relative">
+                            <span class="absolute left-3 top-1/2 -translate-y-1/2
+                                         text-sm text-neutral-500 pointer-events-none">Rp</span>
+                            <input type="text" :value="formatNum(cost)"
+                                   @input="cost = parseInt($event.target.value.replace(/\D/g,'')) || 0"
+                                   class="input pl-9" placeholder="0">
+                            <input type="hidden" name="cost_price" :value="cost">
+                        </div>
+                    </div>
+                    <input type="hidden" name="qty" value="1">
+                    <div class="flex items-center justify-between text-xs px-3 py-2 rounded-lg
+                                bg-neutral-50 dark:bg-neutral-800
+                                border border-neutral-200 dark:border-neutral-700">
+                        <span class="text-neutral-500">Profit</span>
+                        <span class="font-medium"
+                              :class="eceranProfit >= 0 ? 'text-primary-600 dark:text-primary-400' : 'text-red-500'"
+                              x-text="'Rp ' + eceranProfit.toLocaleString('id-ID')"></span>
+                    </div>
+                </div>
+            </template>
+
+            {{-- Rita: jumlah voucher + modal total + harga total --}}
+            <template x-if="svc.kind === 'rita'">
+                <div class="space-y-3">
+                    <div class="text-[11px] px-3 py-2 rounded-lg bg-neutral-50 dark:bg-neutral-800
+                                border border-neutral-200 dark:border-neutral-700 flex justify-between">
+                        <span class="text-neutral-500">Saldo Rita</span>
+                        <span x-text="'Rp ' + (svc.rita_balance || 0).toLocaleString('id-ID')"></span>
+                    </div>
+                    <div>
+                        <label class="label">Jumlah voucher</label>
+                        <input type="number" name="qty" x-model.number="qty" min="1"
+                               :max="svc.product_stock" class="input">
+                        <p class="text-[11px] mt-1"
+                           :class="qty > (svc.product_stock || 0) ? 'text-red-500' : 'text-neutral-400'"
+                           x-text="'Stok voucher: ' + (svc.product_stock || 0) + ' pcs' + (qty > (svc.product_stock||0) ? ' — tidak cukup' : '')"></p>
+                    </div>
+                    <div>
+                        <label class="label">Modal total (Rp)</label>
+                        <div class="relative">
+                            <span class="absolute left-3 top-1/2 -translate-y-1/2
+                                         text-sm text-neutral-500 pointer-events-none">Rp</span>
+                            <input type="text" :value="formatNum(cost)"
+                                   @input="cost = parseInt($event.target.value.replace(/\D/g,'')) || 0"
+                                   class="input pl-9" placeholder="mis: 15.000">
+                            <input type="hidden" name="cost_price" :value="cost">
+                        </div>
+                        <p class="text-[11px] mt-1"
+                           :class="cost > (svc.rita_balance || 0) ? 'text-red-500' : 'text-neutral-400'"
+                           x-text="cost > (svc.rita_balance||0) ? 'Melebihi saldo Rita' : 'Memotong saldo Rita'"></p>
+                    </div>
+                    <div>
+                        <label class="label">Harga total (Rp)</label>
+                        <div class="relative">
+                            <span class="absolute left-3 top-1/2 -translate-y-1/2
+                                         text-sm text-neutral-500 pointer-events-none">Rp</span>
+                            <input type="text" :value="formatNum(sell_price)"
+                                   @input="sell_price = parseInt($event.target.value.replace(/\D/g,'')) || 0"
+                                   class="input pl-9" placeholder="mis: 18.000">
+                            <input type="hidden" name="price" :value="sell_price">
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between text-xs px-3 py-2 rounded-lg
+                                bg-neutral-50 dark:bg-neutral-800
+                                border border-neutral-200 dark:border-neutral-700">
+                        <span class="text-neutral-500">Profit</span>
+                        <span class="font-medium"
+                              :class="eceranProfit >= 0 ? 'text-primary-600 dark:text-primary-400' : 'text-red-500'"
+                              x-text="'Rp ' + eceranProfit.toLocaleString('id-ID')"></span>
+                    </div>
+                </div>
+            </template>
+
             <div x-show="!movesCash">
                 <label class="label">Metode bayar</label>
                 <select name="payment_method" x-model="payment_method" class="select" :disabled="movesCash">
@@ -319,10 +372,41 @@
                 </select>
             </div>
 
+            {{-- Transfer biasa: rekening tujuan (bank / e-wallet) --}}
+            <div x-show="payment_method === 'transfer' && !movesCash" x-cloak>
+                <label class="label">Transfer masuk ke</label>
+                <template x-if="bankAccounts.length > 0">
+                    <select x-model="bank_account_id" name="bank_account_id" class="select w-full">
+                        <option value="">-- Pilih bank / e-wallet --</option>
+                        <template x-for="b in bankAccounts" :key="b.id">
+                            <option :value="b.id" x-text="b.type_label + ' · ' + b.bank_name + ' · ' + b.account_number"></option>
+                        </template>
+                    </select>
+                </template>
+                <template x-if="bankAccounts.length === 0">
+                    <a href="{{ route('banks.index') }}" class="block text-[11px] text-amber-600 dark:text-amber-400 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20">
+                        Belum ada rekening. Tambah dulu di menu Saldo bank.
+                    </a>
+                </template>
+            </div>
+
             <div>
                 <label class="label">Catatan</label>
                 <textarea name="note" rows="2" class="input resize-none"
                           placeholder="Opsional..."></textarea>
+            </div>
+
+            {{-- Rincian nominal + fee (jasa keuangan fee-saja) --}}
+            <div x-show="svc.kind === 'keuangan' && !movesCash" x-cloak
+                 class="text-[11px] text-neutral-500 space-y-0.5 px-1">
+                <div class="flex justify-between">
+                    <span>Nominal (modal)</span>
+                    <span x-text="'Rp ' + nominal.toLocaleString('id-ID')"></span>
+                </div>
+                <div class="flex justify-between">
+                    <span>Fee (profit)</span>
+                    <span x-text="'Rp ' + fee.toLocaleString('id-ID')"></span>
+                </div>
             </div>
 
             <div class="flex items-center justify-between px-3 py-2.5 rounded-lg

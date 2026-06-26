@@ -10,7 +10,9 @@
       "Bash(/Applications/XAMPP/xamppfiles/bin/php --version)",
       "Bash(/Applications/XAMPP/xamppfiles/bin/php artisan *)",
       "Read(//Applications/XAMPP/xamppfiles/share/mysql/**)",
-      "Bash(/Applications/XAMPP/xamppfiles/bin/mysql.server start *)"
+      "Bash(/Applications/XAMPP/xamppfiles/bin/mysql.server start *)",
+      "Bash(php -l resources/views/dashboard/services/_item.blade.php)",
+      "Bash(php -l app/Http/Controllers/ServiceController.php)"
     ]
   }
 }
